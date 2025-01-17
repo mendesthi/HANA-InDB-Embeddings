@@ -1,2 +1,2 @@
-# HANA-Vector-Rag
-Simple Implementation of RAG using SAP HANA Vector Engine, Langchain and SAP Generative AI Hub SDK
+# HANA-Vector-In-DB-Embeddings
+Simple Implementation of in-database embeddingds using SAP HANA Vector Engine

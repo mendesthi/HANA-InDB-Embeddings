@@ -1,9 +1,8 @@
----
 applications:
-- name: generate-embedding
-  memory: 2G
-  disk_quota: 1G
-  instances: 1
-  buildpack: https://github.com/cloudfoundry/python-buildpack.git
-  health-check-type: http
-  health-check-http-endpoint
+  - name: indb-embedding
+    memory: 2G
+    disk_quota: 1G
+    instances: 1
+    buildpack: https://github.com/cloudfoundry/python-buildpack.git
+    health-check-type: http
+    health-check-http-endpoint: "/"
