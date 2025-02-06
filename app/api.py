@@ -1,9 +1,12 @@
 import os
 import configparser
+import pandas as pd
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from hana_ml import dataframe
+
+from app.utilities_hana import kmeans_and_tsne  # Correct import statement
 
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
@@ -26,6 +29,67 @@ connection = dataframe.ConnectionContext(hanaURL, hanaPort, hanaUser, hanaPW)
 
 app = Flask(__name__)
 CORS(app)
+
+# Function to create the CLUSTERING table if it doesn't exist
+def create_clustering_table_if_not_exists():
+    create_table_sql = """
+        DO BEGIN
+            DECLARE table_exists INT;
+            SELECT COUNT(*) INTO table_exists
+            FROM SYS.TABLES 
+            WHERE TABLE_NAME = 'CLUSTERING' AND SCHEMA_NAME = CURRENT_SCHEMA;
+            
+            IF table_exists = 0 THEN
+                CREATE TABLE CLUSTERING (
+                    PROJECT_NUMBER NVARCHAR(255),
+                    x DOUBLE,
+                    y DOUBLE,
+                    CLUSTER_ID INT
+                );
+            END IF;
+        END;
+    """
+    
+    # Use cursor to execute the query
+    cursor = connection.connection.cursor()
+    cursor.execute(create_table_sql)
+    cursor.close()  # Always close the cursor after execution
+
+@app.route('/refresh_clusters', methods=['POST'])
+def refresh_clusters():
+    # Perform clustering and t-SNE on the ADVISORIES2 table
+    df_clusters_2023, labels_2023 = kmeans_and_tsne(connection,  ## Hana ConnectionContext
+                    table_name='ADVISORIES2', 
+                    result_table_name='CLUSTERING', 
+                    n_components=64, 
+                    perplexity= 5, ## perplexity for T-SNE algorithm  
+                    start_date='1900-01-01', ## first date for projects to be considered in the analysis
+                    end_date='2024-01-01'
+                    )
+    return jsonify({"message": "Clusters refreshed successfully"}), 200
+
+@app.route('/get_clusters', methods=['GET'])
+def get_clusters():
+    # Ensure the CLUSTERS_2023 table exists
+    create_clustering_table_if_not_exists()
+    
+    # Retrieve data from the CLUSTERS_2023 table
+    sql_query = "SELECT * FROM CLUSTERING"
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    clusters = hana_df.collect()  # Return results as a pandas DataFrame
+    
+    # Convert DataFrame to list of dictionaries
+    formatted_clusters = [
+        {
+            "x": row["x"],
+            "y": row["y"],
+            "CLUSTER_ID": row["CLUSTER_ID"],
+            "PROJECT_NUMBER": row["PROJECT_NUMBER"]
+        }
+        for _, row in clusters.iterrows()
+    ]
+    
+    return jsonify(formatted_clusters), 200
 
 # Step 2: Function to create the table if it doesn't exist
 def create_table_if_not_exists(schema_name, table_name):
@@ -82,7 +146,6 @@ def insert_text_and_vector():
 def compare_text_to_existing():
     data = request.get_json()
     schema_name = data.get('schema_name', 'DBUSER')  # Default schema
-    table_name = data.get('table_name', 'TCM_SAMPLE')  # Default table
     query_text = data.get('query_text')
     text_type = data.get('text_type', 'QUERY')
     model_version = data.get('model_version', 'SAP_NEB.20240715')
@@ -92,14 +155,23 @@ def compare_text_to_existing():
     
     # Generate the new text's embedding and compare using COSINE_SIMILARITY
     sql_query = f"""
-        SELECT TOP 5
-            TEXT, 
-            COSINE_SIMILARITY(
-                EMBEDDING, 
-                VECTOR_EMBEDDING('{query_text}', '{text_type}', '{model_version}')
-            ) AS SIMILARITY
-        FROM {schema_name}.{table_name}
-        ORDER BY SIMILARITY DESC
+        SELECT "solution" AS text,
+               "project_number", 
+               COSINE_SIMILARITY(
+                   "solution_embedding", 
+                   VECTOR_EMBEDDING('{query_text}', '{text_type}', '{model_version}')
+               ) AS similarity
+        FROM {schema_name}.ADVISORIES
+        UNION ALL
+        SELECT "comment" AS text, 
+               "project_number", 
+               COSINE_SIMILARITY(
+                   "comment_embedding", 
+                   VECTOR_EMBEDDING('{query_text}', '{text_type}', '{model_version}')
+               ) AS similarity
+        FROM {schema_name}.COMMENTS
+        ORDER BY similarity DESC
+        LIMIT 5
     """
     hana_df = dataframe.DataFrame(connection, sql_query)
     similarities = hana_df.collect()  # Return results as a pandas DataFrame
@@ -107,6 +179,51 @@ def compare_text_to_existing():
     # Convert results to a list of dictionaries for JSON response
     results = similarities.to_dict(orient='records')
     return jsonify({"similarities": results}), 200
+
+@app.route('/get_project_details', methods=['GET'])
+def get_project_details():
+    schema_name = request.args.get('schema_name', 'DBUSER')  # Default schema
+    project_number = request.args.get('project_number')
+    
+    if not project_number:
+        return jsonify({"error": "Project number is required"}), 400
+    
+    # SQL query to join ADVISORIES and COMMENTS tables on project_number, excluding embeddings
+    sql_query = f"""
+        SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
+               a."project_number", a."solution", a."topic",
+               c."comment", c."comment_date", c."index" AS comments_index
+        FROM {schema_name}.advisories a
+        LEFT JOIN {schema_name}.comments c
+        ON a."project_number" = c."project_number"
+        WHERE a."project_number" = {project_number}
+    """
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    project_details = hana_df.collect()  # Return results as a pandas DataFrame
+
+    # Convert results to a list of dictionaries for JSON response
+    results = project_details.to_dict(orient='records')
+    return jsonify({"project_details": results}), 200
+
+@app.route('/get_all_projects', methods=['GET'])
+def get_all_projects():
+    schema_name = request.args.get('schema_name', 'DBUSER')  # Default schema
+    
+    # SQL query to retrieve all data from ADVISORIES and COMMENTS tables, excluding embeddings
+    sql_query = f"""
+        SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
+               a."project_number", a."solution", a."topic",
+               c."comment", c."comment_date", c."index" AS comments_index
+        FROM {schema_name}.advisories a
+        LEFT JOIN {schema_name}.comments c
+        ON a."project_number" = c."project_number"
+    """
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    all_projects = hana_df.collect()  # Return results as a pandas DataFrame
+
+    # Convert results to a list of dictionaries for JSON response
+    results = all_projects.to_dict(orient='records')
+    return jsonify({"all_projects": results}), 200
 
 @app.route('/', methods=['GET'])
 def root():
