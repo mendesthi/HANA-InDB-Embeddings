@@ -47,6 +47,18 @@ def create_clustering_table_if_not_exists():
                     CLUSTER_ID INT
                 );
             END IF;
+            
+            -- Check and create CLUSTERING_DATA table
+            SELECT COUNT(*) INTO table_exists
+            FROM SYS.TABLES 
+            WHERE TABLE_NAME = 'CLUSTERING_DATA' AND SCHEMA_NAME = CURRENT_SCHEMA;
+            
+            IF table_exists = 0 THEN
+                CREATE TABLE CLUSTERING_DATA (
+                    CLUSTER_ID INT,
+                    CLUSTER_DESCRIPTION NVARCHAR(255)
+                );
+            END IF;
         END;
     """
     
@@ -57,8 +69,11 @@ def create_clustering_table_if_not_exists():
 
 @app.route('/refresh_clusters', methods=['POST'])
 def refresh_clusters():
-    # Perform clustering and t-SNE on the ADVISORIES2 table
-    df_clusters_2023, labels_2023 = kmeans_and_tsne(connection,  ## Hana ConnectionContext
+    # Ensure the CLUSTERING table exists
+    create_clustering_table_if_not_exists()
+    
+    # Perform clustering and t-SNE on the ADVISORIES table
+    df_clusters, labels = kmeans_and_tsne(connection,  ## Hana ConnectionContext
                     table_name='ADVISORIES2', 
                     result_table_name='CLUSTERING', 
                     n_components=64, 
@@ -66,14 +81,25 @@ def refresh_clusters():
                     start_date='1900-01-01', ## first date for projects to be considered in the analysis
                     end_date='2024-01-01'
                     )
+    
+    # Insert the values of the "labels" variable into the CLUSTERING_DATA table
+    cursor = connection.connection.cursor()
+    for cluster_id, cluster_description in labels.items():
+        insert_sql = f"""
+            INSERT INTO CLUSTERING_DATA (CLUSTER_ID, CLUSTER_DESCRIPTION)
+            VALUES ({cluster_id}, '{cluster_description.replace("'", "''")}')
+        """
+        cursor.execute(insert_sql)
+    cursor.close()
+
     return jsonify({"message": "Clusters refreshed successfully"}), 200
 
 @app.route('/get_clusters', methods=['GET'])
 def get_clusters():
-    # Ensure the CLUSTERS_2023 table exists
+    # Ensure the CLUSTERING table exists
     create_clustering_table_if_not_exists()
     
-    # Retrieve data from the CLUSTERS_2023 table
+    # Retrieve data from the CLUSTERING table
     sql_query = "SELECT * FROM CLUSTERING"
     hana_df = dataframe.DataFrame(connection, sql_query)
     clusters = hana_df.collect()  # Return results as a pandas DataFrame
@@ -90,6 +116,27 @@ def get_clusters():
     ]
     
     return jsonify(formatted_clusters), 200
+
+@app.route('/get_clusters_description', methods=['GET'])
+def get_clusters_description():
+    # Ensure the CLUSTERING table exists
+    create_clustering_table_if_not_exists()
+    
+    # Retrieve data from the CLUSTERING table
+    sql_query = "SELECT * FROM CLUSTERING_DATA"
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    clusters = hana_df.collect()  # Return results as a pandas DataFrame
+    
+    # Convert DataFrame to list of dictionaries
+    formatted_cluster_description = [
+        {
+            "CLUSTER_ID": row["CLUSTER_ID"],
+            "CLUSTER_DESCRIPTION": row["CLUSTER_DESCRIPTION"]
+        }
+        for _, row in clusters.iterrows()
+    ]
+    
+    return jsonify(formatted_cluster_description), 200
 
 # Step 2: Function to create the table if it doesn't exist
 def create_table_if_not_exists(schema_name, table_name):
