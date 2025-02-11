@@ -6,7 +6,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from hana_ml import dataframe
 
-from app.utilities_hana import kmeans_and_tsne  # Correct import statement
+from app.utilities_hana import kmeans_and_tsne  # Correct import statement CF
+# from utilities_hana import kmeans_and_tsne  # Correct import statement LOCALHOST
 
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
@@ -29,6 +30,116 @@ connection = dataframe.ConnectionContext(hanaURL, hanaPort, hanaUser, hanaPW)
 
 app = Flask(__name__)
 CORS(app)
+
+# Function to create the PROJECT_BY_CATEGORY table if it doesn't exist
+def create_project_by_category_table_if_not_exists():
+    create_table_sql = """
+        DO BEGIN
+            DECLARE table_exists INT;
+            
+            -- Check and create PROJECT_BY_CATEGORY table
+            SELECT COUNT(*) INTO table_exists
+            FROM SYS.TABLES 
+            WHERE TABLE_NAME = 'PROJECT_BY_CATEGORY' AND SCHEMA_NAME = CURRENT_SCHEMA;
+            
+            IF table_exists = 0 THEN
+                CREATE TABLE PROJECT_BY_CATEGORY (
+                    PROJECT_ID INT,
+                    CATEGORY_ID INT
+                );
+            END IF;
+        END;
+    """
+    
+    # Use cursor to execute the query
+    cursor = connection.connection.cursor()
+    cursor.execute(create_table_sql)
+    cursor.close()  # Always close the cursor after execution
+
+@app.route('/update_categories_and_projects', methods=['POST'])
+def update_categories_and_projects():
+    data = request.get_json()
+    categories = data
+    
+    if not categories:
+        return jsonify({"error": "No categories provided"}), 400
+    
+    cursor = connection.connection.cursor()
+    
+    # Drop existing values from the CATEGORIES table
+    cursor.execute("TRUNCATE TABLE CATEGORIES")
+    
+    # Add new categories to the CATEGORIES table
+    for index, (title, description) in enumerate(categories.items()):
+        insert_sql = f"""
+            INSERT INTO CATEGORIES ("index", "category_label", "category_descr")
+            VALUES ({index}, '{title.replace("'", "''")}', '{description.replace("'", "''")}')
+        """
+        cursor.execute(insert_sql)
+    
+    # Ensure the PROJECT_BY_CATEGORY table exists
+    create_project_by_category_table_if_not_exists()
+    
+    # Retrieve categories from the CATEGORIES table
+    categories_df = dataframe.DataFrame(connection, 'SELECT * FROM CATEGORIES')
+    
+    # Retrieve topics from the ADVISORIES2 table
+    advisories_df = dataframe.DataFrame(connection, 'SELECT "project_number", "topic" FROM ADVISORIES2')
+    
+    # Calculate COSINE similarity and update PROJECT_BY_CATEGORY table
+    cursor.execute("TRUNCATE TABLE PROJECT_BY_CATEGORY")
+    
+    for advisory in advisories_df.collect().to_dict(orient='records'):
+        # print("Advisory columns:", advisory.keys())
+        project_number = advisory['project_number']
+        topic = advisory['topic']
+        
+        # Check if project_number is an integer
+        if not isinstance(project_number, int):
+            print(f"Skipping project_number={project_number} as it is not an integer")
+            continue
+    
+        # Calculate COSINE similarity with each category
+        similarities = []
+        for category in categories_df.collect().to_dict(orient='records'):
+
+            category_id = category['index']
+            category_description = category['category_descr']
+            
+            # Use HANA SQL for COSINE similarity
+            similarity_sql = f"""
+                SELECT COSINE_SIMILARITY(
+                    VECTOR_EMBEDDING('{topic.replace("'", "''")}', 'DOCUMENT', 'SAP_NEB.20240715'),
+                    VECTOR_EMBEDDING('{category_description.replace("'", "''")}', 'DOCUMENT', 'SAP_NEB.20240715')
+                ) AS similarity
+                FROM DUMMY
+            """
+
+            similarity_df = dataframe.DataFrame(connection, similarity_sql)
+            similarity_results = similarity_df.collect()
+            
+            if not similarity_results.empty:
+                similarity = similarity_results.iloc[0]['SIMILARITY']
+                similarities.append((category_id, similarity))
+            else:
+                print(f"No similarity result for category_id={category_id} and topic={topic}")
+
+        # Find the most similar category
+        if similarities:
+            most_similar_category = max(similarities, key=lambda x: x[1])
+            category_id = most_similar_category[0]
+
+            # Update PROJECT_BY_CATEGORY table
+            insert_sql = f"""
+                INSERT INTO "PROJECT_BY_CATEGORY" ("PROJECT_ID", "CATEGORY_ID")
+                VALUES ('{project_number}', {category_id})
+            """
+            cursor.execute(insert_sql)
+        else:
+            print(f"No valid similarities found for project_number={project_number}")
+    
+    cursor.close()
+    return jsonify({"message": "Categories and project categories updated successfully"}), 200
 
 # Function to create the CLUSTERING table if it doesn't exist
 def create_clustering_table_if_not_exists():
@@ -56,7 +167,8 @@ def create_clustering_table_if_not_exists():
             IF table_exists = 0 THEN
                 CREATE TABLE CLUSTERING_DATA (
                     CLUSTER_ID INT,
-                    CLUSTER_DESCRIPTION NVARCHAR(255)
+                    CLUSTER_DESCRIPTION NVARCHAR(255),
+                    EMBEDDING REAL_VECTOR GENERATED ALWAYS AS VECTOR_EMBEDDING(CLUSTER_DESCRIPTION, 'DOCUMENT', 'SAP_NEB.20240715')
                 );
             END IF;
         END;
