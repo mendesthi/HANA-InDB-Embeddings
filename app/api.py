@@ -141,6 +141,21 @@ def update_categories_and_projects():
     cursor.close()
     return jsonify({"message": "Categories and project categories updated successfully"}), 200
 
+@app.route('/get_all_project_categories', methods=['GET'])
+def get_all_project_categories():
+    # SQL query to retrieve all records from the PROJECT_BY_CATEGORY table
+    sql_query = """
+        SELECT pbc."PROJECT_ID", c."category_label"
+        FROM "PROJECT_BY_CATEGORY" pbc
+        JOIN "CATEGORIES" c ON pbc."CATEGORY_ID" = c."index"
+    """
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    project_categories = hana_df.collect()  # Return results as a pandas DataFrame
+
+    # Convert results to a list of dictionaries for JSON response
+    results = project_categories.to_dict(orient='records')
+    return jsonify({"project_categories": results}), 200
+
 # Function to create the CLUSTERING table if it doesn't exist
 def create_clustering_table_if_not_exists():
     create_table_sql = """
