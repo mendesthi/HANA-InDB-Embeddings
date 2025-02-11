@@ -6,8 +6,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from hana_ml import dataframe
 
-from app.utilities_hana import kmeans_and_tsne  # Correct import statement CF
-# from utilities_hana import kmeans_and_tsne  # Correct import statement LOCALHOST
+# from app.utilities_hana import kmeans_and_tsne  # Correct import statement CF
+from utilities_hana import kmeans_and_tsne  # Correct import statement LOCALHOST
 
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
@@ -83,8 +83,8 @@ def update_categories_and_projects():
     # Retrieve categories from the CATEGORIES table
     categories_df = dataframe.DataFrame(connection, 'SELECT * FROM CATEGORIES')
     
-    # Retrieve topics from the ADVISORIES2 table
-    advisories_df = dataframe.DataFrame(connection, 'SELECT "project_number", "topic" FROM ADVISORIES2')
+    # Retrieve topics from the ADVISORIES4 table
+    advisories_df = dataframe.DataFrame(connection, 'SELECT "project_number", "topic" FROM ADVISORIES4')
     
     # Calculate COSINE similarity and update PROJECT_BY_CATEGORY table
     cursor.execute("TRUNCATE TABLE PROJECT_BY_CATEGORY")
@@ -201,7 +201,7 @@ def refresh_clusters():
     
     # Perform clustering and t-SNE on the ADVISORIES table
     df_clusters, labels = kmeans_and_tsne(connection,  ## Hana ConnectionContext
-                    table_name='ADVISORIES2', 
+                    table_name='ADVISORIES4', 
                     result_table_name='CLUSTERING', 
                     n_components=64, 
                     perplexity= 5, ## perplexity for T-SNE algorithm  
@@ -343,7 +343,7 @@ def compare_text_to_existing():
                    "comment_embedding", 
                    VECTOR_EMBEDDING('{query_text}', '{text_type}', '{model_version}')
                ) AS similarity
-        FROM {schema_name}.COMMENTS
+        FROM {schema_name}.COMMENTS4
         ORDER BY similarity DESC
         LIMIT 5
     """
@@ -368,7 +368,7 @@ def get_project_details():
                a."project_number", a."solution", a."topic",
                c."comment", c."comment_date", c."index" AS comments_index
         FROM {schema_name}.advisories a
-        LEFT JOIN {schema_name}.comments c
+        LEFT JOIN {schema_name}.COMMENTS4 c
         ON a."project_number" = c."project_number"
         WHERE a."project_number" = {project_number}
     """
@@ -389,7 +389,7 @@ def get_all_projects():
                a."project_number", a."solution", a."topic",
                c."comment", c."comment_date", c."index" AS comments_index
         FROM {schema_name}.advisories a
-        LEFT JOIN {schema_name}.comments c
+        LEFT JOIN {schema_name}.COMMENTS4 c
         ON a."project_number" = c."project_number"
     """
     hana_df = dataframe.DataFrame(connection, sql_query)

@@ -134,6 +134,7 @@ def label_clusters(profiling_string):
     Return the output in the following format: \n CLUSTER 1 : label CLUSTER 2 : label ....\ \n do not add anythng other than clusters named and labels\
     \n{profiling_string} "
     messages = [{"role": "user", "content": prompt} ]
-    kwargs = dict(model_name='mistralai--mistral-large-instruct', messages=messages)
+    # kwargs = dict(model_name='mistralai--mistral-large-instruct', messages=messages)
+    kwargs = dict(model_name='gpt-4o', messages=messages)
     response = chat.completions.create(**kwargs)
     return response.to_dict()["choices"][0]["message"]["content"].strip()
