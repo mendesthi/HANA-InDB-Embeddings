@@ -156,6 +156,29 @@ def get_all_project_categories():
     results = project_categories.to_dict(orient='records')
     return jsonify({"project_categories": results}), 200
 
+@app.route('/get_advisories_by_expert_and_category', methods=['GET'])
+def get_advisories_by_expert_and_category():
+    expert = request.args.get('expert')
+    
+    if not expert:
+        return jsonify({"error": "Expert is required"}), 400
+    
+    # SQL query to retrieve the number of advisories by expert and category
+    sql_query = f"""
+        SELECT c."category_label" AS category, COUNT(a."project_number") AS projects
+        FROM "PROJECT_BY_CATEGORY" pbc
+        JOIN "CATEGORIES" c ON pbc."CATEGORY_ID" = c."index"
+        JOIN "ADVISORIES4" a ON pbc."PROJECT_ID" = a."project_number"
+        WHERE a."architect" = '{expert.replace("'", "''")}'
+        GROUP BY c."category_label"
+    """
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    advisories_by_category = hana_df.collect()  # Return results as a pandas DataFrame
+
+    # Convert results to a list of dictionaries for JSON response
+    results = advisories_by_category.to_dict(orient='records')
+    return jsonify({"advisories_by_category": results}), 200
+
 # Function to create the CLUSTERING table if it doesn't exist
 def create_clustering_table_if_not_exists():
     create_table_sql = """
