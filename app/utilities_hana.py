@@ -100,7 +100,7 @@ def kmeans_and_tsne(connection,  ## Hana ConnectionContext
         profiling_string+=f"CLUSTER {name}\n"
         group.sort_values(by='DISTANCE', ascending=True)
         most_representative_topics=group.reindex().topic.tolist()
-        for d in most_representative_topics[:5]:
+        for d in most_representative_topics[:20]:
             profiling_string+=f"- {d}\n"
 
     generated_labels=label_clusters(profiling_string)

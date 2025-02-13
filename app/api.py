@@ -8,17 +8,18 @@ from hana_ml import dataframe
 
 from datetime import datetime
 
-from app.utilities_hana import kmeans_and_tsne  # works in CF
-#from utilities_hana import kmeans_and_tsne  # works in local machine
-
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
+    from app.utilities_hana import kmeans_and_tsne  # works in CF
+    
     # Running on Cloud Foundry, use environment variables
     hanaURL = os.getenv('DB_ADDRESS')
     hanaPort = os.getenv('DB_PORT')
     hanaUser = os.getenv('DB_USER')
     hanaPW = os.getenv('DB_PASSWORD')
 else:
+    from utilities_hana import kmeans_and_tsne  # works in local machine
+    
     # Not running on Cloud Foundry, read from config.ini file
     config = configparser.ConfigParser()
     config.read('config.ini')
@@ -292,6 +293,36 @@ def get_clusters_description():
     ]
     
     return jsonify(formatted_cluster_description), 200
+
+@app.route('/get_projects_by_architect_and_cluster', methods=['GET'])
+def get_projects_by_architect_and_cluster():
+    # Retrieve the architect parameter from the URL
+    expert = request.args.get('expert')
+    
+    # Base SQL query
+    sql_query = """
+        SELECT a."architect", c."CLUSTER_ID", COUNT(a."project_number") AS project_count
+        FROM "CLUSTERING" c
+        JOIN "ADVISORIES4" a ON c."PROJECT_NUMBER" = a."project_number"
+    """
+    
+    # Add WHERE clause if architect is provided
+    if expert:
+        sql_query += f"""
+        WHERE a."architect" = '{expert.replace("'", "''")}'
+        """
+    
+    # Add GROUP BY clause
+    sql_query += """
+        GROUP BY a."architect", c."CLUSTER_ID"
+    """
+    
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    projects_by_architect_and_cluster = hana_df.collect()  # Return results as a pandas DataFrame
+
+    # Convert results to a list of dictionaries for JSON response
+    results = projects_by_architect_and_cluster.to_dict(orient='records')
+    return jsonify({"projects_by_architect_and_cluster": results}), 200
 
 # Step 2: Function to create the table if it doesn't exist
 def create_table_if_not_exists(schema_name, table_name):
