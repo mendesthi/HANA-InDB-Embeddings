@@ -2,11 +2,10 @@ import os
 import configparser
 import pandas as pd
 
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from hana_ml import dataframe
-
-from datetime import datetime
 
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
@@ -222,6 +221,10 @@ def create_clustering_table_if_not_exists():
 
 @app.route('/refresh_clusters', methods=['POST'])
 def refresh_clusters():
+    # Retrieve start_date and end_date from URL arguments
+    start_date = request.args.get('start_date', '1900-01-01')  # Default to '1900-01-01' if not provided
+    end_date = request.args.get('end_date', datetime.now().strftime('%Y-%m-%d'))  # Default to current date if not provided
+    
     # Ensure the CLUSTERING table exists
     create_clustering_table_if_not_exists()
     
@@ -231,8 +234,8 @@ def refresh_clusters():
                     result_table_name='CLUSTERING', 
                     n_components=64, 
                     perplexity= 5, ## perplexity for T-SNE algorithm  
-                    start_date='1900-01-01', ## first date for projects to be considered in the analysis
-                    end_date=datetime.now().strftime('%Y-%m-%d')
+                    start_date=start_date,
+                    end_date=end_date
                     )
     
     # Insert the values of the "labels" variable into the CLUSTERING_DATA table

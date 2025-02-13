@@ -1,3 +1,4 @@
+from datetime import datetime
 from hana_ml.dataframe import ConnectionContext
 import pandas as pd
 
@@ -33,7 +34,7 @@ def kmeans_and_tsne(connection,  ## Hana ConnectionContext
                     n_components, ## number of components for the PCA algorithm (64 for instance)
                     perplexity= 5, ## perplexity for T-SNE algorithm  
                     start_date='1900-01-01', ## first date for projects to be considered in the analysis
-                    end_date='2050-01-01'
+                    end_date=datetime.now().strftime('%Y-%m-%d')
                     ): ## last date for projects to be considered in the analysis
 
     #debug date
