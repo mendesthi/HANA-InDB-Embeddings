@@ -6,8 +6,10 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from hana_ml import dataframe
 
-# from app.utilities_hana import kmeans_and_tsne  # Correct import statement CF
-from utilities_hana import kmeans_and_tsne  # Correct import statement LOCALHOST
+from datetime import datetime
+
+from app.utilities_hana import kmeans_and_tsne  # works in CF
+#from utilities_hana import kmeans_and_tsne  # works in local machine
 
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
@@ -229,11 +231,14 @@ def refresh_clusters():
                     n_components=64, 
                     perplexity= 5, ## perplexity for T-SNE algorithm  
                     start_date='1900-01-01', ## first date for projects to be considered in the analysis
-                    end_date='2024-01-01'
+                    end_date=datetime.now().strftime('%Y-%m-%d')
                     )
     
     # Insert the values of the "labels" variable into the CLUSTERING_DATA table
     cursor = connection.connection.cursor()
+    # Truncate the CLUSTERING_DATA table
+    cursor.execute("TRUNCATE TABLE CLUSTERING_DATA")
+
     for cluster_id, cluster_description in labels.items():
         insert_sql = f"""
             INSERT INTO CLUSTERING_DATA (CLUSTER_ID, CLUSTER_DESCRIPTION)
@@ -338,7 +343,7 @@ def insert_text_and_vector():
     
     return jsonify({"message": f"Text inserted successfully into {schema_name}.{table_name}"}), 200
 
-# Step 4: Function to compare a new text's vector to existing stored vectors using COSINE_SIMILARITY
+# Function to compare a new text's vector to existing stored vectors using COSINE_SIMILARITY
 @app.route('/compare_text_to_existing', methods=['POST'])
 def compare_text_to_existing():
     data = request.get_json()
@@ -379,13 +384,13 @@ def compare_text_to_existing():
 
 @app.route('/get_project_details', methods=['GET'])
 def get_project_details():
-    schema_name = request.args.get('schema_name', 'DBUSER')  # Default schema
+    schema_name = request.args.get('schema_name', 'DBUSER')
     project_number = request.args.get('project_number')
     
     if not project_number:
         return jsonify({"error": "Project number is required"}), 400
     
-    # SQL query to join ADVISORIES and COMMENTS tables on project_number, excluding embeddings
+    # SQL query to join ADVISORIES and COMMENTS tables on project_number
     sql_query = f"""
         SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
                a."project_number", a."solution", a."topic",
@@ -406,7 +411,7 @@ def get_project_details():
 def get_all_projects():
     schema_name = request.args.get('schema_name', 'DBUSER')  # Default schema
     
-    # SQL query to retrieve all data from ADVISORIES and COMMENTS tables, excluding embeddings
+    # SQL query to retrieve all data from ADVISORIES and COMMENTS tables
     sql_query = f"""
         SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
                a."project_number", a."solution", a."topic",

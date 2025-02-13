@@ -5,6 +5,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from hana_ml import dataframe
 
+from hana_ml.text.pal_embeddings import PALEmbeddings
+
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
     # Running on Cloud Foundry, use environment variables
@@ -21,13 +23,31 @@ else:
     hanaUser = config['database']['user']
     hanaPW = config['database']['password']
 
-# Step 1: Establish a connection to SAP HANA
 connection = dataframe.ConnectionContext(hanaURL, hanaPort, hanaUser, hanaPW)
 
 app = Flask(__name__)
 CORS(app)
 
-# Step 2: Function to create the table if it doesn't exist
+@app.route('/generate_text_embeddings', methods=['GET'])
+def generate_text_embeddings():
+    # SQL query to retrieve the top 3 text entries
+    sql_select = """
+        SELECT TOP 3 TEXT_ID, TEXT
+        FROM DBUSER.TCM_MYKNOWLEDGEBASE
+    """
+    myknowledgebase_hdf = connection.sql(sql_select)
+
+    # Generating Text Embeddings in SAP HANA Cloud with the new PAL function
+    pe = PALEmbeddings()
+    textembeddings = pe.fit_transform(myknowledgebase_hdf, key="TEXT_ID", target=["TEXT"])
+
+    # Collect the results and convert to a list of dictionaries
+    embeddings_list = textembeddings.collect().to_dict(orient='records')
+
+    # Return the embeddings as a JSON response
+    return jsonify({"text_embeddings": embeddings_list}), 200
+
+# Function to create the table if it doesn't exist
 def create_table_if_not_exists():
     create_table_sql = """
         DO BEGIN
@@ -45,14 +65,15 @@ def create_table_if_not_exists():
         END;
     """
     
-    # Use cursor to execute the query
+    # Execute the query
     cursor = connection.connection.cursor()
     cursor.execute(create_table_sql)
-    cursor.close()  # Always close the cursor after execution
+    cursor.close()
     
-# Step 3: Function to insert text and its embedding vector into the "tcm_sample" table
+# Function to insert text and its embedding vector into the sample table
 @app.route('/insert_text_and_vector', methods=['POST'])
 def insert_text_and_vector():
+    
     # Create the table if it doesn't exist
     create_table_if_not_exists()
 
@@ -68,14 +89,14 @@ def insert_text_and_vector():
         FROM DUMMY
     """
     
-    # Use cursor to execute the query
+    # Execute the query
     cursor = connection.connection.cursor()
     cursor.execute(sql_insert)
-    cursor.close()  # Always close the cursor after execution
+    cursor.close()
     
     return jsonify({"message": "Text and vector inserted successfully"}), 200
 
-# Step 4: Function to compare a new text's vector to existing stored vectors using COSINE_SIMILARITY
+# Function to compare a new text's vector to existing stored vectors using COSINE_SIMILARITY
 @app.route('/compare_text_to_existing', methods=['POST'])
 def compare_text_to_existing():
     data = request.get_json()

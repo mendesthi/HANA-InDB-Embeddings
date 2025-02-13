@@ -27,17 +27,6 @@ from hana_ml.algorithms.pal.decomposition import CATPCA
 from hana_ml.algorithms.pal.tsne import TSNE
 from hana_ml.algorithms.pal.clustering import DBSCAN, HDBSCAN, KMeans
 
-# def label_clusters(profiling_string):
-#     prompt=f"You will help e analyze the result of a machine learnirn algorithm for clustering on text data. \
-#     The algorithm was used to find clusters in topics of customer advisory servises around various services of the SAP Cloud platform (BTP). \
-#     For each cluster, find a good label based on the topics of a few datapoint samples.\
-#     Return the output in the following format: \n CLUSTER 1 : label CLUSTER 2 : label ....\ \n do not add anythng other than clusters named and labels\
-#     \n{profiling_string} "
-#     messages = [{"role": "user", "content": prompt} ]
-#     kwargs = dict(model_name='mistralai--mistral-large-instruct', messages=messages)
-#     response = chat.completions.create(**kwargs)
-#     return response.to_dict()["choices"][0]["message"]["content"].strip()
-
 def kmeans_and_tsne(connection,  ## Hana ConnectionContext
                     table_name, ## Name of the table containing the projects
                     result_table_name, ## Name for results with clusters
@@ -47,6 +36,9 @@ def kmeans_and_tsne(connection,  ## Hana ConnectionContext
                     end_date='2050-01-01'
                     ): ## last date for projects to be considered in the analysis
 
+    #debug date
+    print('end date: ', end_date)
+    
     hdf=connection.table(table_name)
     # Dimenstionality reduction. Reduce embeddings to a lower dimension (n_components
     cpc = CATPCA(scaling=True,
