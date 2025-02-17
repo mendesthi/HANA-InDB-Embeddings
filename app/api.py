@@ -158,6 +158,20 @@ def get_all_project_categories():
     results = project_categories.to_dict(orient='records')
     return jsonify({"project_categories": results}), 200
 
+@app.route('/get_categories', methods=['GET'])
+def get_categories():
+    # SQL query to retrieve all records from the CATEGORIES table
+    sql_query = """
+        SELECT "index", "category_label", "category_descr"
+        FROM "CATEGORIES"
+    """
+    hana_df = dataframe.DataFrame(connection, sql_query)
+    categories = hana_df.collect()  # Return results as a pandas DataFrame
+
+    # Convert results to a list of dictionaries for JSON response
+    results = categories.to_dict(orient='records')
+    return jsonify(results), 200
+
 @app.route('/get_advisories_by_expert_and_category', methods=['GET'])
 def get_advisories_by_expert_and_category():
     expert = request.args.get('expert')
@@ -399,7 +413,7 @@ def compare_text_to_existing():
                    "solution_embedding", 
                    VECTOR_EMBEDDING('{query_text}', '{text_type}', '{model_version}')
                ) AS similarity
-        FROM {schema_name}.ADVISORIES
+        FROM {schema_name}.ADVISORIES4
         UNION ALL
         SELECT "comment" AS text, 
                "project_number", 
@@ -452,7 +466,7 @@ def get_all_projects():
         SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
                a."project_number", a."solution", a."topic",
                c."comment", c."comment_date", c."index" AS comments_index
-        FROM {schema_name}.advisories a
+        FROM {schema_name}.advisories4 a
         LEFT JOIN {schema_name}.COMMENTS4 c
         ON a."project_number" = c."project_number"
     """
