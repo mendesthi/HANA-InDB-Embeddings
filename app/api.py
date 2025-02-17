@@ -56,7 +56,7 @@ def create_project_by_category_table_if_not_exists():
     # Use cursor to execute the query
     cursor = connection.connection.cursor()
     cursor.execute(create_table_sql)
-    cursor.close()  # Always close the cursor after execution
+    cursor.close()  
 
 @app.route('/update_categories_and_projects', methods=['POST'])
 def update_categories_and_projects():
@@ -217,7 +217,7 @@ def create_clustering_table_if_not_exists():
     # Use cursor to execute the query
     cursor = connection.connection.cursor()
     cursor.execute(create_table_sql)
-    cursor.close()  # Always close the cursor after execution
+    cursor.close()  
 
 @app.route('/refresh_clusters', methods=['POST'])
 def refresh_clusters():
@@ -229,18 +229,20 @@ def refresh_clusters():
     create_clustering_table_if_not_exists()
     
     # Perform clustering and t-SNE on the ADVISORIES table
-    df_clusters, labels = kmeans_and_tsne(connection,  ## Hana ConnectionContext
-                    table_name='ADVISORIES4', 
-                    result_table_name='CLUSTERING', 
-                    n_components=64, 
-                    perplexity= 5, ## perplexity for T-SNE algorithm  
-                    start_date=start_date,
-                    end_date=end_date
-                    )
+    df_clusters, labels = kmeans_and_tsne(
+                            connection,  ## Hana ConnectionContext
+                            table_name='ADVISORIES4', 
+                            result_table_name='CLUSTERING', 
+                            n_components=64, 
+                            perplexity= 5, ## perplexity for T-SNE algorithm  
+                            start_date=start_date,
+                            end_date=end_date
+                        )
     
     # Insert the values of the "labels" variable into the CLUSTERING_DATA table
     cursor = connection.connection.cursor()
-    # Truncate the CLUSTERING_DATA table
+    
+    # Delete previous clustering run
     cursor.execute("TRUNCATE TABLE CLUSTERING_DATA")
 
     for cluster_id, cluster_description in labels.items():
@@ -349,7 +351,7 @@ def create_table_if_not_exists(schema_name, table_name):
     # Use cursor to execute the query
     cursor = connection.connection.cursor()
     cursor.execute(create_table_sql)
-    cursor.close()  # Always close the cursor after execution
+    cursor.close()  
     
 # Step 3: Function to insert text and its embedding vector into the "TCM_SAMPLE" table
 @app.route('/insert_text_and_vector', methods=['POST'])
@@ -373,7 +375,7 @@ def insert_text_and_vector():
     # Use cursor to execute the query
     cursor = connection.connection.cursor()
     cursor.execute(sql_insert)
-    cursor.close()  # Always close the cursor after execution
+    cursor.close()  
     
     return jsonify({"message": f"Text inserted successfully into {schema_name}.{table_name}"}), 200
 
@@ -429,7 +431,7 @@ def get_project_details():
         SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
                a."project_number", a."solution", a."topic",
                c."comment", c."comment_date", c."index" AS comments_index
-        FROM {schema_name}.advisories a
+        FROM {schema_name}.advisories4 a
         LEFT JOIN {schema_name}.COMMENTS4 c
         ON a."project_number" = c."project_number"
         WHERE a."project_number" = {project_number}
