@@ -239,10 +239,10 @@ def refresh_clusters():
     # start_date = request.args.get('start_date', '1900-01-01')  # Default to '1900-01-01' if not provided
     # end_date = request.args.get('end_date', datetime.now().strftime('%Y-%m-%d'))  # Default to current date if not provided
     
-    # Retrieve start_date and end_date from the request body
-    data = request.get_json()
-    start_date = data.get('start_date', '1900-01-01')  # Default to '1900-01-01' if not provided
-    end_date = data.get('end_date', datetime.now().strftime('%Y-%m-%d'))  # Default to current date if not provided
+
+    # Retrieve start_date and end_date from the form data
+    start_date = request.form.get('start_date', '1900-01-01')  # Default to '1900-01-01' if not provided
+    end_date = request.form.get('end_date', datetime.now().strftime('%Y-%m-%d'))  # Default to current date if not provided
     
     # Ensure the CLUSTERING table exists
     create_clustering_table_if_not_exists()
