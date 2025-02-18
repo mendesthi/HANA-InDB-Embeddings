@@ -66,8 +66,8 @@ def kmeans_and_tsne(connection,                                     ## Hana Conn
     df_clusters_1 = df_clusters.select('project_number', 'CLUSTER_ID','DISTANCE').rename_columns({'project_number' : 'PROJECT_NUMBER_1'})
     df_tsne_with_cluster = df_tsne_res.alias('TSNE').rename_columns({'project_number' : 'PROJECT_NUMBER'}).join(other = df_clusters_1.alias('CLST'),
                                                       condition = 'PROJECT_NUMBER = PROJECT_NUMBER_1' ).drop('PROJECT_NUMBER_1')
-    # Debug: Print the content of df_tsne_with_cluster
-    print(df_tsne_with_cluster.collect())
+    # Collect the results
+    df_tsne_with_cluster.collect()
     
     df_tsne_with_cluster.save(result_table_name, force=True )
 
