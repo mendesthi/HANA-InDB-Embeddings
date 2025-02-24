@@ -4,98 +4,132 @@ import pandas as pd
 
 from hana_ml.algorithms.pal.decomposition import CATPCA
 from hana_ml.algorithms.pal.tsne import TSNE
-from hana_ml.algorithms.pal.clustering import DBSCAN, HDBSCAN, KMeans
+from hana_ml.algorithms.pal.clustering import KMeans
 
 from gen_ai_hub.proxy.native.openai import chat
 
-def kmeans_and_tsne(connection,                                     ## Hana ConnectionContext
-                    table_name,                                     ## Name of the table containing the projects
-                    result_table_name,                              ## Name for results with clusters
-                    n_components,                                   ## number of components for the PCA algorithm (64 for instance)
-                    perplexity= 5,                                  ## perplexity for T-SNE algorithm  
-                    start_date='1900-01-01',                        ## first date for projects to be considered in the analysis
-                    end_date=datetime.now().strftime('%Y-%m-%d')    ## last date for projects to be considered in the analysis
+def kmeans_and_tsne(connection,                                     
+                    table_name,                                     
+                    result_table_name,                              
+                    n_components,                                   
+                    perplexity= 5,                                  
+                    start_date='1900-01-01',                       
+                    end_date=datetime.now().strftime('%Y-%m-%d')    
                     ): 
     
-    # Retrieve data from the table we want to analyze
-    hdf=connection.table(table_name)
+    # Retrieve knowledge base data
+    hdf = connection.table(table_name) 
     
-    # Dimenstionality reduction. Reduce embeddings to a lower dimension (n_components)
+    # Reduce embeddings dimensions
     cpc = CATPCA(scaling=True,
                  thread_ratio=0.9,
                  scores=True,
                  n_components=n_components,
                  component_tol=1e-5)
     
+    # Fit the model
     cpc.fit(data=hdf.select(['project_number','topic_embedding']), key='project_number') 
     
-    # Categorial PCA, outputs the individual component dimensions seperately, not as single vector
-    # The individual component dimensions are output as rows, therefore require to be transposed into columns for further analysis
-    compl_pcavecs_pivot = cpc.scores_.pivot_table(columns = 'COMPONENT_ID',
-    values = 'COMPONENT_SCORE',
-    index = 'project_number',
-    aggfunc = 'AVG')
+    # Categorical PCA outputs components as rows, which need to be transposed for analysis
+    compl_pcavecs_pivot = cpc.scores_.pivot_table(  columns = 'COMPONENT_ID',
+                                                    values = 'COMPONENT_SCORE',
+                                                    index = 'project_number',
+                                                    aggfunc = 'AVG')
 
     # Display embeddings in a 2-dim space with T-SNE algorithm
     tsne = TSNE(n_iter = 5000,
-            random_state = 1,
-            n_components = 2,
-            angle = 0.0,
-            exaggeration = 20,
-            learning_rate = 10,
-            perplexity = perplexity,
-            object_frequency = 50,
-            thread_ratio = 0.5)
+                random_state = 1,
+                n_components = 2,
+                angle = 0.0,
+                exaggeration = 20,
+                learning_rate = 10,
+                perplexity = perplexity,
+                object_frequency = 50,
+                thread_ratio = 0.5)
 
-    df_tsne_res, stats, obj = tsne.fit_predict(
-                                   data = compl_pcavecs_pivot, 
-                                   key = 'project_number')
+    # Fit the model
+    df_tsne_res, stats, obj = tsne.fit_predict(data = compl_pcavecs_pivot, 
+                                                key = 'project_number')
     
     ## Add project date in pca results
-    compl_pcavecs_pivot = compl_pcavecs_pivot.set_index("project_number").join(hdf.select(['project_number','project_date']).set_index("project_number"))
+    compl_pcavecs_pivot = compl_pcavecs_pivot.set_index("project_number").join(
+        hdf.select(['project_number','project_date']).set_index("project_number"))
     
-    ## Filter projects by dates
+    ## Filter projects by dates & remove project_date from the pca results
     filter_str=f" PROJECT_DATE >= TO_DATE('{start_date}') AND PROJECT_DATE < TO_DATE('{end_date}')"
-    compl_pcavecs_pivot = compl_pcavecs_pivot.rename_columns({'project_date' : 'PROJECT_DATE'}).filter(filter_str).deselect('PROJECT_DATE')
-
+    compl_pcavecs_pivot = compl_pcavecs_pivot.rename_columns({'project_date' : 'PROJECT_DATE'})
+    compl_pcavecs_pivot = compl_pcavecs_pivot.filter(filter_str).deselect('PROJECT_DATE')
+    
     # Run the clustering algorithm on the filtered data
     km = KMeans(n_clusters_min=5, n_clusters_max=10, max_iter=5000, distance_level='euclidean')    
     df_clusters  = km.fit_predict(data=compl_pcavecs_pivot, key='project_number')
 
      # Merge Cluster Results with T-SNE data
-    df_clusters_1 = df_clusters.select('project_number', 'CLUSTER_ID','DISTANCE').rename_columns({'project_number' : 'PROJECT_NUMBER_1'})
-    df_tsne_with_cluster = df_tsne_res.alias('TSNE').rename_columns({'project_number' : 'PROJECT_NUMBER'}).join(other = df_clusters_1.alias('CLST'),
-                                                      condition = 'PROJECT_NUMBER = PROJECT_NUMBER_1' ).drop('PROJECT_NUMBER_1')
-    # Collect the results
-    df_tsne_with_cluster.collect()
-    
+    df_clusters_1 = df_clusters.select('project_number', 'CLUSTER_ID','DISTANCE')
+    df_clusters_1 = df_clusters_1.rename_columns({'project_number' : 'PROJECT_NUMBER_1'})
+
+    df_tsne_with_cluster = df_tsne_res.alias('TSNE').rename_columns({'project_number' : 'PROJECT_NUMBER'})
+    df_tsne_with_cluster = df_tsne_with_cluster.join(other = df_clusters_1.alias('CLST'),
+                                                    condition = 'PROJECT_NUMBER = PROJECT_NUMBER_1')
+    df_tsne_with_cluster = df_tsne_with_cluster.drop('PROJECT_NUMBER_1')
+
     df_tsne_with_cluster.save(result_table_name, force=True )
 
-    # Profiling and labeling clusters
-    clustered_df = pd.merge(hdf.deselect(['topic_embedding','solution_embedding']).rename_columns({'project_number' : 'PROJECT_NUMBER'}).collect(), df_tsne_with_cluster.collect(), how='left',on='PROJECT_NUMBER') 
-    
-    profiling_string=""
+    # Select and rename columns in hdf, then collect the data
+    hdf_processed = hdf.deselect(['topic_embedding', 'solution_embedding']) \
+                        .rename_columns({'project_number' : 'PROJECT_NUMBER'}) \
+                        .collect()
+
+    # Collect df_tsne_with_cluster data
+    df_tsne_processed = df_tsne_with_cluster.collect()
+
+    # Merge the two dataframes
+    clustered_df = pd.merge(
+        hdf_processed, 
+        df_tsne_processed, 
+        how='left', 
+        on='PROJECT_NUMBER'
+    )
+
+    # Initialize the profiling string
+    profiling_string = ""
+
+    # Loop through each cluster and its corresponding group
     for name, group in clustered_df.groupby('CLUSTER_ID'):
-        profiling_string+=f"CLUSTER {name}\n"
-        group.sort_values(by='DISTANCE', ascending=True)
-        most_representative_topics=group.reindex().topic.tolist()
-        for d in most_representative_topics[:20]:
-            profiling_string+=f"- {d}\n"
+        # Add cluster header to profiling string
+        profiling_string += f"CLUSTER {name}\n"
+        
+        # Sort the group by distance
+        sorted_group = group.sort_values(by='DISTANCE', ascending=True)
+        
+        # Get the top 20 most representative topics
+        most_representative_topics = sorted_group.reindex().topic.tolist()[:20]
+        
+        # Add each topic to the profiling string
+        for topic in most_representative_topics:
+            profiling_string += f"- {topic}\n"
 
     generated_labels=label_clusters(profiling_string)
     
-    # Extracting dictionary of clusters names
-    clusters_labels =  [ x.split(':') for x in generated_labels.split('CLUSTER')]
-    clusters_labels= [i for i in clusters_labels if len(i)==2]
-    clusters_dict={}
-    for c in clusters_labels:
-        key=c[0].strip()
-        key="{:0.0f}".format(float(key))
-        clusters_dict[key]=c[1]
+    # Extract cluster labels from the generated labels
+    clusters_labels = [x.split(':') for x in generated_labels.split('CLUSTER')]
+
+    # Filter out entries that do not contain exactly two elements
+    valid_clusters = [label for label in clusters_labels if len(label) == 2]
+
+    # Initialize an empty dictionary for cluster names
+    clusters_dict = {}
+
+    # Iterate through each valid cluster and assign its name to the dictionary
+    for cluster in valid_clusters:
+        key = cluster[0].strip()  # Extract and clean the key
+        key = "{:0.0f}".format(float(key))  # Format key as a string without decimals
+        clusters_dict[key] = cluster[1]  # Assign the corresponding cluster name
+
+    # Return the resulting dictionary
     clusters_dict
     
     return df_tsne_with_cluster, clusters_dict
-
 
 def label_clusters(profiling_string):
     prompt=f"You will help to analyze the result of a machine learnirn algorithm for clustering on text data. \

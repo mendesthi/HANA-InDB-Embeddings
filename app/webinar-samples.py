@@ -1,11 +1,13 @@
 import os
 import configparser
+import pandas as pd
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from hana_ml import dataframe
 
 from hana_ml.text.pal_embeddings import PALEmbeddings
+
 
 # Check if the application is running on Cloud Foundry
 if 'VCAP_APPLICATION' in os.environ:
@@ -46,6 +48,66 @@ def generate_text_embeddings():
 
     # Return the embeddings as a JSON response
     return jsonify({"text_embeddings": embeddings_list}), 200
+
+@app.route('/generate_text_embeddings_my_knowledgebase', methods=['POST'])
+def update_embeddings_in_db():
+    try:
+        # Run a lightweight query to get only the TEXT_IDs that need embeddings:
+        sql_select_ids = """
+            SELECT TEXT_ID FROM DBUSER.TCM_MYKNOWLEDGEBASE
+        """
+        # Assuming connection.sql returns a result similar to a pandas DataFrame or list of lists
+        print("DEBUG", connection.sql(sql_select_ids))
+        text_id_df = connection.sql(sql_select_ids).collect()  # Use collect() for HANA context
+        
+        # Check the structure of text_id_df
+        if isinstance(text_id_df, list):
+            # If it's a 2D list, convert to pandas DataFrame
+            text_id_df = pd.DataFrame(text_id_df, columns=["TEXT_ID"])
+        
+        # Ensure it's now a DataFrame-like structure
+        if isinstance(text_id_df, pd.DataFrame):
+            # Extract TEXT_IDs into a list
+            text_id_list = text_id_df['TEXT_ID'].tolist()
+        else:
+            return jsonify({"error": "Unexpected data format for TEXT_IDs"}), 500
+        
+        # Loop through the TEXT_IDs and fetch their corresponding TEXT values one by one:
+        for text_id in text_id_list:
+            sql_select_text = f"""
+                SELECT TEXT FROM DBUSER.TCM_MYKNOWLEDGEBASE WHERE TEXT_ID = '{text_id}'
+            """
+            text_df = connection.sql(sql_select_text).collect()
+
+            # Check if text_df is not empty (if it's a DataFrame)
+            if isinstance(text_df, pd.DataFrame) and not text_df.empty:
+                text_value = text_df.iloc[0]["TEXT"]
+
+                # Generate embedding
+                pe = PALEmbeddings()
+                embedding_df = pe.fit_transform(pd.DataFrame({"TEXT_ID": [text_id], "TEXT": [text_value]}),
+                                                key="TEXT_ID", target=["TEXT"])
+
+                # Convert embedding to proper format
+                embedding_records = embedding_df.collect().to_dict(orient="records")
+                
+                if embedding_records:  # Ensure it's not empty
+                    embedding_vector = embedding_records[0]["TEXT_EMBEDDING"]
+
+                    # Update database
+                    sql_update = """
+                        UPDATE DBUSER.TCM_MYKNOWLEDGEBASE
+                        SET TEXT_EMBEDDING = ?
+                        WHERE TEXT_ID = ?
+                    """
+                    cursor = connection.connection.cursor()
+                    cursor.execute(sql_update, (str(embedding_vector), text_id))
+                    cursor.close()
+
+        return jsonify({"message": "Embeddings updated successfully."}), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # Function to create the table if it doesn't exist
 def create_table_if_not_exists():

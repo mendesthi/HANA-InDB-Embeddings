@@ -33,6 +33,34 @@ connection = dataframe.ConnectionContext(hanaURL, hanaPort, hanaUser, hanaPW)
 app = Flask(__name__)
 CORS(app)
 
+# Function to create the CATEGORIES table if it doesn't exist
+def create_categories_table_if_not_exists():
+    create_table_sql = """
+        DO BEGIN
+            DECLARE table_exists INT;
+            
+            -- Check and create CATEGORIES table
+            SELECT COUNT(*) INTO table_exists
+            FROM SYS.TABLES 
+            WHERE TABLE_NAME = 'CATEGORIES' AND SCHEMA_NAME = CURRENT_SCHEMA;
+            
+            IF table_exists = 0 THEN
+                CREATE TABLE CATEGORIES (
+                    "index" INTEGER,
+                    "category_label" NVARCHAR(100),
+                    "category_descr" NVARCHAR(5000),
+                    "category_embedding" REAL_VECTOR 
+                        GENERATED ALWAYS AS VECTOR_EMBEDDING("category_descr", 'DOCUMENT', 'SAP_NEB.20240715')
+                );
+            END IF;
+        END;
+    """
+    
+    # Use cursor to execute the query
+    cursor = connection.connection.cursor()
+    cursor.execute(create_table_sql)
+    cursor.close()
+    
 # Function to create the PROJECT_BY_CATEGORY table if it doesn't exist
 def create_project_by_category_table_if_not_exists():
     create_table_sql = """
@@ -57,7 +85,7 @@ def create_project_by_category_table_if_not_exists():
     cursor = connection.connection.cursor()
     cursor.execute(create_table_sql)
     cursor.close()  
-
+    
 @app.route('/update_categories_and_projects', methods=['POST'])
 def update_categories_and_projects():
     data = request.get_json()
@@ -68,10 +96,19 @@ def update_categories_and_projects():
     
     cursor = connection.connection.cursor()
     
+    # Ensure the CATEGORIES table exists
+    create_categories_table_if_not_exists()
+    
     # Drop existing values from the CATEGORIES table
     cursor.execute("TRUNCATE TABLE CATEGORIES")
     
-    # Add new categories to the CATEGORIES table
+    # Ensure the PROJECT_BY_CATEGORY table exists
+    create_project_by_category_table_if_not_exists()
+    
+    # Drop existing values from the PROJECT_BY_CATEGORY table
+    cursor.execute("TRUNCATE TABLE PROJECT_BY_CATEGORY")
+    
+    # Add custom categories to the CATEGORIES table
     for index, (title, description) in enumerate(categories.items()):
         insert_sql = f"""
             INSERT INTO CATEGORIES ("index", "category_label", "category_descr")
@@ -79,18 +116,13 @@ def update_categories_and_projects():
         """
         cursor.execute(insert_sql)
     
-    # Ensure the PROJECT_BY_CATEGORY table exists
-    create_project_by_category_table_if_not_exists()
-    
     # Retrieve categories from the CATEGORIES table
     categories_df = dataframe.DataFrame(connection, 'SELECT * FROM CATEGORIES')
     
-    # Retrieve topics from the ADVISORIES4 table
+    # Retrieve topics from the ADVISORIES table
     advisories_df = dataframe.DataFrame(connection, 'SELECT "project_number", "topic" FROM ADVISORIES4')
     
-    # Calculate COSINE similarity and update PROJECT_BY_CATEGORY table
-    cursor.execute("TRUNCATE TABLE PROJECT_BY_CATEGORY")
-    
+    # Iterate over each advisory and calculate the most similar category
     for advisory in advisories_df.collect().to_dict(orient='records'):
         # print("Advisory columns:", advisory.keys())
         project_number = advisory['project_number']
@@ -101,8 +133,8 @@ def update_categories_and_projects():
             print(f"Skipping project_number={project_number} as it is not an integer")
             continue
     
-        # Calculate COSINE similarity with each category
         similarities = []
+        # Iterate over each category and calculate the similarity
         for category in categories_df.collect().to_dict(orient='records'):
 
             category_id = category['index']
