@@ -1,6 +1,5 @@
 import os
 import configparser
-import pandas as pd
 
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -500,12 +499,16 @@ def get_all_projects():
     
     # SQL query to retrieve all data from ADVISORIES and COMMENTS tables
     sql_query = f"""
-        SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
-               a."project_number", a."solution", a."topic",
-               c."comment", c."comment_date", c."index" AS comments_index
-        FROM {schema_name}.advisories4 a
-        LEFT JOIN {schema_name}.COMMENTS4 c
-        ON a."project_number" = c."project_number"
+        SELECT * FROM (
+            SELECT a."architect", a."index" AS advisories_index, a."pcb_number", a."project_date", 
+                   a."project_number", a."solution", a."topic",
+                   c."comment", c."comment_date", c."index" AS comments_index,
+                   ROW_NUMBER() OVER (PARTITION BY a."project_number" ORDER BY a."index") AS row_num
+            FROM {schema_name}.advisories4 a
+            LEFT JOIN {schema_name}.COMMENTS4 c
+            ON a."project_number" = c."project_number"
+        ) subquery
+        WHERE row_num = 1
     """
     hana_df = dataframe.DataFrame(connection, sql_query)
     all_projects = hana_df.collect()  # Return results as a pandas DataFrame

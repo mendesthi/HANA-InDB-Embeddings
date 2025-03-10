@@ -30,33 +30,14 @@ connection = dataframe.ConnectionContext(hanaURL, hanaPort, hanaUser, hanaPW)
 app = Flask(__name__)
 CORS(app)
 
-@app.route('/generate_text_embeddings', methods=['GET'])
-def generate_text_embeddings():
-    # SQL query to retrieve the top 3 text entries
-    sql_select = """
-        SELECT TOP 3 TEXT_ID, TEXT
-        FROM DBUSER.TCM_MYKNOWLEDGEBASE
-    """
-    myknowledgebase_hdf = connection.sql(sql_select)
-
-    # Generating Text Embeddings in SAP HANA Cloud with the new PAL function
-    pe = PALEmbeddings()
-    textembeddings = pe.fit_transform(myknowledgebase_hdf, key="TEXT_ID", target=["TEXT"])
-
-    # Collect the results and convert to a list of dictionaries
-    embeddings_list = textembeddings.collect().to_dict(orient='records')
-
-    # Return the embeddings as a JSON response
-    return jsonify({"text_embeddings": embeddings_list}), 200
-
 @app.route('/generate_text_embeddings_my_knowledgebase', methods=['POST'])
 def update_embeddings_in_db():
     try:
         # Run a lightweight query to get only the TEXT_IDs that need embeddings:
         sql_select_ids = """
-            SELECT TEXT_ID FROM DBUSER.TCM_MYKNOWLEDGEBASE WHERE TEXT_EMBEDDING IS NULL
+            SELECT ID FROM DBUSER.KNOWLEDGE_BASE_MANUAL WHERE TOPIC_EMBEDDING IS NULL
         """
-        text_id_df = connection.sql(sql_select_ids).collect()  # Use collect() for HANA context
+        text_id_df = connection.sql(sql_select_ids).collect()
         
         if text_id_df.empty:
             return jsonify({"message": "No records found without embeddings."}), 200
@@ -64,9 +45,9 @@ def update_embeddings_in_db():
         # Ensure it's now a DataFrame-like structure
         if isinstance(text_id_df, pd.DataFrame):
             # Extract TEXT_IDs into a list
-            text_id_list = text_id_df['TEXT_ID'].tolist()
+            text_id_list = text_id_df['ID'].tolist()
         else:
-            return jsonify({"error": "Unexpected data format for TEXT_IDs"}), 500
+            return jsonify({"error": "Unexpected data format for IDs"}), 500
         
         # Initialize a counter for the number of records processed
         records_processed = 0
@@ -74,31 +55,33 @@ def update_embeddings_in_db():
         # Loop through the TEXT_IDs and fetch their corresponding TEXT values one by one:
         for text_id in text_id_list:
             sql_select_text = f"""
-                SELECT TEXT_ID, TEXT, TEXT_EMBEDDING FROM DBUSER.TCM_MYKNOWLEDGEBASE WHERE TEXT_ID = '{text_id}'
+                SELECT ID, TOPIC, SOLUTION FROM DBUSER.KNOWLEDGE_BASE_MANUAL WHERE ID = '{text_id}'
             """
-            # text_df = connection.sql(sql_select_text).collect()
+            
             text_df = connection.sql(sql_select_text)
 
             # Check if text_df is not empty
             if not text_df.collect().empty:
                 # Generate embedding
                 pe = PALEmbeddings()
-                embedding_df = pe.fit_transform(data=text_df, key="TEXT_ID", target=["TEXT"])
+                embedding_df = pe.fit_transform(data=text_df, key="ID", target=["TOPIC", "SOLUTION"])
 
                 # Convert embedding to proper format
                 embedding_records = embedding_df.collect().to_dict(orient="records")
                 
-                if embedding_records:  # Ensure it's not empty
-                    embedding_vector = embedding_records[0]["VECTOR_COL_TEXT"]
-
+                if embedding_records:
                     # Update database
                     sql_update = """
-                        UPDATE DBUSER.TCM_MYKNOWLEDGEBASE
-                        SET TEXT_EMBEDDING = ?
-                        WHERE TEXT_ID = ?
+                        UPDATE DBUSER.KNOWLEDGE_BASE_MANUAL
+                        SET TOPIC_EMBEDDING = ?,
+                        SOLUTION_EMBEDDING = ?
+                        WHERE ID = ?
                     """
                     cursor = connection.connection.cursor()
-                    cursor.execute(sql_update, (embedding_vector, text_id))
+                    cursor.execute(sql_update, 
+                                   (embedding_records[0]["VECTOR_COL_TOPIC"], 
+                                    embedding_records[0]["VECTOR_COL_SOLUTION"], 
+                                    text_id))
                     cursor.close()
                     
                     # Increment the counter
@@ -132,7 +115,26 @@ def create_table_if_not_exists():
     cursor = connection.connection.cursor()
     cursor.execute(create_table_sql)
     cursor.close()
-    
+
+@app.route('/generate_text_embeddings', methods=['GET'])
+def generate_text_embeddings():
+    # SQL query to retrieve the top 3 text entries
+    sql_select = """
+        SELECT TOP 3 TEXT_ID, TEXT
+        FROM DBUSER.TCM_MYKNOWLEDGEBASE
+    """
+    myknowledgebase_hdf = connection.sql(sql_select)
+
+    # Generating Text Embeddings in SAP HANA Cloud with the new PAL function
+    pe = PALEmbeddings()
+    textembeddings = pe.fit_transform(myknowledgebase_hdf, key="TEXT_ID", target=["TEXT"])
+
+    # Collect the results and convert to a list of dictionaries
+    embeddings_list = textembeddings.collect().to_dict(orient='records')
+
+    # Return the embeddings as a JSON response
+    return jsonify({"text_embeddings": embeddings_list}), 200
+
 # Function to insert text and its embedding vector into the sample table
 @app.route('/insert_text_and_vector', methods=['POST'])
 def insert_text_and_vector():
